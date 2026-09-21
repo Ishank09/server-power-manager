@@ -41,8 +41,10 @@ systemctl stop gdm3 2>/dev/null
 # 1. Terminate desktop applications and GUI terminal sessions to reclaim RAM and CPU
 # (Preserves remote SSH/Mosh sessions, Docker, and background system services)
 echo " [*] Cleaning up desktop applications and GUI terminals..."
-killall -q -u root-admin brave brave-browser gnome-terminal-server 2>/dev/null || true
-systemctl --user -M root-admin@ stop app.slice 2>/dev/null || true
+for u in $(loginctl list-users --no-legend 2>/dev/null | awk '$1 >= 1000 {print $2}'); do
+    killall -q -u "$u" brave brave-browser gnome-terminal-server 2>/dev/null || true
+    systemctl --user -M "${u}@" stop app.slice 2>/dev/null || true
+done
 
 # 2. Flush disk caches and compact memory
 echo " [*] Flushing disk caches and compacting memory..."
@@ -72,12 +74,14 @@ else
 fi
 
 # HDD Management
-if [ "$ENABLE_HDD_SLEEP" = true ]; then
-    hdparm -B 127 -S 120 /dev/sda > /dev/null 2>&1
-    echo " [+] HDD       : AUTO-SLEEP (10 min spindown)"
-else
-    hdparm -B 254 -S 0 /dev/sda > /dev/null 2>&1
-    echo " [-] HDD       : ALWAYS-READY (No sleep spindown)"
+if [ -b /dev/sda ]; then
+    if [ "$ENABLE_HDD_SLEEP" = true ]; then
+        hdparm -B 127 -S 120 /dev/sda > /dev/null 2>&1
+        echo " [+] HDD       : AUTO-SLEEP (10 min spindown)"
+    else
+        hdparm -B 254 -S 0 /dev/sda > /dev/null 2>&1
+        echo " [-] HDD       : ALWAYS-READY (No sleep spindown)"
+    fi
 fi
 
 # CPU Governor & Energy Performance Preference
