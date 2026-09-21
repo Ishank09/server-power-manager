@@ -12,19 +12,58 @@ echo "   Setting up Server / Desktop Power Management & Auto-Idle"
 echo "================================================================="
 
 # 1. Install required packages
-echo "[1/8] Installing dependencies (hdparm, tlp, tlp-rdw)..."
+echo "[1/9] Installing dependencies (hdparm, tlp, tlp-rdw)..."
 apt update
 apt install -y hdparm tlp tlp-rdw
 
-# 2. Setup server-mode
-echo "[2/8] Installing /usr/local/bin/server-mode..."
+# 2. Setup configuration file
+echo "[2/9] Installing default configuration in /etc/server-power-manager.conf..."
+if [ ! -f /etc/server-power-manager.conf ]; then
+    cat << 'EOF' > /etc/server-power-manager.conf
+# /etc/server-power-manager.conf
+# Configuration for Server Power Manager & Auto-Idle
+
+# Inactivity timeout (in minutes) before auto-switching to server mode
+IDLE_TIMEOUT_MINUTES=30
+
+# Automatically spin down mechanical HDDs in server mode (true/false)
+ENABLE_HDD_SLEEP=true
+
+# Keep Bluetooth enabled in server mode (true/false)
+ENABLE_BLUETOOTH=false
+
+# Keep Screen backlight enabled in server mode (true/false)
+ENABLE_SCREEN=false
+EOF
+    echo " [+] Created /etc/server-power-manager.conf"
+else
+    echo " [.] Existing /etc/server-power-manager.conf preserved."
+fi
+
+# 3. Setup laptop lid-close behavior (ignore lid close to prevent unintended suspend)
+echo "[3/9] Configuring clean laptop lid-close behavior..."
+mkdir -p /etc/systemd/logind.conf.d
+cat << 'EOF' > /etc/systemd/logind.conf.d/server-lid.conf
+[Login]
+HandleLidSwitch=ignore
+HandleLidSwitchExternalPower=ignore
+HandleLidSwitchDocked=ignore
+EOF
+systemctl kill -s HUP systemd-logind 2>/dev/null || true
+echo " [+] Laptop lid-close set to ignore (no logind suspend spam)."
+
+# 4. Setup server-mode
+echo "[4/9] Installing /usr/local/bin/server-mode..."
 cat << 'EOF' > /usr/local/bin/server-mode
 #!/bin/bash
 [ "$EUID" -ne 0 ] && exec sudo "$0" "$@"
 
-ENABLE_BT=false
-ENABLE_SCREEN=false
-ENABLE_HDD_SLEEP=false
+# Load configuration if available
+[ -f /etc/server-power-manager.conf ] && . /etc/server-power-manager.conf
+
+ENABLE_BT=${ENABLE_BLUETOOTH:-false}
+ENABLE_SCREEN=${ENABLE_SCREEN:-false}
+ENABLE_HDD_SLEEP=${ENABLE_HDD_SLEEP:-false}
 
 for arg in "$@"; do
     case "$arg" in
@@ -36,13 +75,23 @@ for arg in "$@"; do
 done
 
 echo "==> Entering SERVER POWER-SAVE MODE..."
-systemctl stop gdm3 2>/dev/null
 
-# 1. Terminate desktop applications and GUI terminal sessions to reclaim RAM and CPU
+# Universal display manager shutdown
+for dm in display-manager gdm3 gdm sddm lightdm; do
+    if systemctl is-active --quiet "$dm" 2>/dev/null; then
+        systemctl stop "$dm" 2>/dev/null || true
+    fi
+done
+
+# 1. Gracefully terminate desktop applications and GUI terminal sessions
 # (Preserves remote SSH/Mosh sessions, Docker, and background system services)
-echo " [*] Cleaning up desktop applications and GUI terminals..."
+echo " [*] Gracefully terminating desktop applications and GUI terminals..."
 for u in $(loginctl list-users --no-legend 2>/dev/null | awk '$1 >= 1000 {print $2}'); do
-    killall -q -u "$u" brave brave-browser gnome-terminal-server 2>/dev/null || true
+    pkill -TERM -u "$u" -f "brave|chrome|chromium|gnome-terminal-server" 2>/dev/null || true
+done
+sleep 2
+for u in $(loginctl list-users --no-legend 2>/dev/null | awk '$1 >= 1000 {print $2}'); do
+    pkill -KILL -u "$u" -f "brave|chrome|chromium|gnome-terminal-server" 2>/dev/null || true
     systemctl --user -M "${u}@" stop app.slice 2>/dev/null || true
 done
 
@@ -73,16 +122,19 @@ else
     echo " [-] Screen    : OFF"
 fi
 
-# HDD Management
-if [ -b /dev/sda ]; then
-    if [ "$ENABLE_HDD_SLEEP" = true ]; then
-        hdparm -B 127 -S 120 /dev/sda > /dev/null 2>&1
-        echo " [+] HDD       : AUTO-SLEEP (10 min spindown)"
-    else
-        hdparm -B 254 -S 0 /dev/sda > /dev/null 2>&1
-        echo " [-] HDD       : ALWAYS-READY (No sleep spindown)"
+# Mechanical HDD Management (Auto-detects rotational drives)
+for devpath in /sys/block/sd* /sys/block/hd*; do
+    if [ -f "$devpath/queue/rotational" ] && [ "$(cat "$devpath/queue/rotational" 2>/dev/null)" = "1" ]; then
+        disk="/dev/$(basename "$devpath")"
+        if [ "$ENABLE_HDD_SLEEP" = true ]; then
+            hdparm -B 127 -S 120 "$disk" > /dev/null 2>&1
+            echo " [+] HDD ($disk) : AUTO-SLEEP (10 min spindown)"
+        else
+            hdparm -B 254 -S 0 "$disk" > /dev/null 2>&1
+            echo " [-] HDD ($disk) : ALWAYS-READY (No sleep spindown)"
+        fi
     fi
-fi
+done
 
 # CPU Governor & Energy Performance Preference
 echo "powersave" | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor > /dev/null 2>&1
@@ -92,8 +144,8 @@ done
 echo "==> ACTIVE: Server mode running. Maximum RAM freed & CPU throttled to minimum."
 EOF
 
-# 3. Setup desktop-mode
-echo "[3/8] Installing /usr/local/bin/desktop-mode..."
+# 5. Setup desktop-mode
+echo "[5/9] Installing /usr/local/bin/desktop-mode..."
 cat << 'EOF' > /usr/local/bin/desktop-mode
 #!/bin/bash
 [ "$EUID" -ne 0 ] && exec sudo "$0" "$@"
@@ -111,19 +163,30 @@ echo "performance" | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor >
 for epp in /sys/devices/system/cpu/cpu*/cpufreq/energy_performance_preference; do
     [ -f "$epp" ] && echo "balance_performance" > "$epp" 2>/dev/null || true
 done
-hdparm -B 254 -S 0 /dev/sda > /dev/null 2>&1
 
-# 3. Start or Restart Desktop Interface
-if systemctl is-active --quiet gdm3; then
-    systemctl restart gdm3
-else
-    systemctl start gdm3
-fi
+# 3. Wake up mechanical HDDs
+for devpath in /sys/block/sd* /sys/block/hd*; do
+    if [ -f "$devpath/queue/rotational" ] && [ "$(cat "$devpath/queue/rotational" 2>/dev/null)" = "1" ]; then
+        disk="/dev/$(basename "$devpath")"
+        hdparm -B 254 -S 0 "$disk" > /dev/null 2>&1
+    fi
+done
+
+# 4. Start Desktop Interface (Display Manager)
+for dm in display-manager gdm3 gdm sddm lightdm; do
+    if systemctl is-active --quiet "$dm" 2>/dev/null; then
+        systemctl restart "$dm" 2>/dev/null && break
+    elif systemctl is-enabled --quiet "$dm" 2>/dev/null; then
+        systemctl start "$dm" 2>/dev/null && break
+    fi
+done
+systemctl start display-manager 2>/dev/null || systemctl start gdm3 2>/dev/null || true
+
 echo "==> ACTIVE: Desktop interface restored and screen backlight on."
 EOF
 
-# 4. Setup hardware toggles
-echo "[4/8] Installing hardware toggle scripts..."
+# 6. Setup hardware toggles
+echo "[6/9] Installing hardware toggle scripts..."
 cat << 'EOF' > /usr/local/bin/screen-on
 #!/bin/bash
 [ "$EUID" -ne 0 ] && exec sudo "$0" "$@"
@@ -158,27 +221,47 @@ EOF
 cat << 'EOF' > /usr/local/bin/hdd-sleep
 #!/bin/bash
 [ "$EUID" -ne 0 ] && exec sudo "$0" "$@"
-hdparm -B 127 -S 120 /dev/sda > /dev/null 2>&1
-echo "HDD set to AUTO-SLEEP after 10 minutes idle."
+FOUND=false
+for devpath in /sys/block/sd* /sys/block/hd*; do
+    if [ -f "$devpath/queue/rotational" ] && [ "$(cat "$devpath/queue/rotational" 2>/dev/null)" = "1" ]; then
+        disk="/dev/$(basename "$devpath")"
+        hdparm -B 127 -S 120 "$disk" > /dev/null 2>&1
+        echo "HDD ($disk) set to AUTO-SLEEP after 10 minutes idle."
+        FOUND=true
+    fi
+done
+[ "$FOUND" = false ] && echo "No rotational mechanical HDDs detected (SSDs/NVMe skipped)."
 EOF
 
 cat << 'EOF' > /usr/local/bin/hdd-awake
 #!/bin/bash
 [ "$EUID" -ne 0 ] && exec sudo "$0" "$@"
-hdparm -B 254 -S 0 /dev/sda > /dev/null 2>&1
-echo "HDD set to ALWAYS-READY (No sleep/spindown)."
+FOUND=false
+for devpath in /sys/block/sd* /sys/block/hd*; do
+    if [ -f "$devpath/queue/rotational" ] && [ "$(cat "$devpath/queue/rotational" 2>/dev/null)" = "1" ]; then
+        disk="/dev/$(basename "$devpath")"
+        hdparm -B 254 -S 0 "$disk" > /dev/null 2>&1
+        echo "HDD ($disk) set to ALWAYS-READY (No spindown)."
+        FOUND=true
+    fi
+done
+[ "$FOUND" = false ] && echo "No rotational mechanical HDDs detected (SSDs/NVMe skipped)."
 EOF
 
-# 5. Setup status & help
-echo "[5/8] Installing server-status and server-help..."
+# 7. Setup status & help
+echo "[7/9] Installing server-status and server-help..."
 cat << 'EOF' > /usr/local/bin/server-status
 #!/bin/bash
 echo "==================== SERVER HARDWARE STATUS ===================="
-if systemctl is-active --quiet gdm3; then
-    echo "  Desktop (GNOME)   : [ ACTIVE / RUNNING ]"
-else
-    echo "  Desktop (GNOME)   : [ STOPPED (Headless) ]"
-fi
+DM_ACTIVE=false
+for dm in display-manager gdm3 gdm sddm lightdm; do
+    if systemctl is-active --quiet "$dm" 2>/dev/null; then
+        echo "  Desktop ($dm)  : [ ACTIVE / RUNNING ]"
+        DM_ACTIVE=true
+        break
+    fi
+done
+[ "$DM_ACTIVE" = false ] && echo "  Desktop (GUI)     : [ STOPPED (Headless Server) ]"
 
 BRIGHTNESS=$(cat /sys/class/backlight/*/brightness 2>/dev/null | head -n 1)
 if [ "$BRIGHTNESS" = "0" ]; then
@@ -195,13 +278,21 @@ fi
 
 RAM_INFO=$(free -h 2>/dev/null | awk '/^Mem:/ {print $3 "/" $2 " used"}')
 CPU_LOAD=$(awk '{print $1 ", " $2 ", " $3}' /proc/loadavg 2>/dev/null)
-HDD_STATE=$(hdparm -C /dev/sda 2>/dev/null | grep -oE "active/idle|standby|unknown")
-[ -z "$HDD_STATE" ] && HDD_STATE=$(sudo -n hdparm -C /dev/sda 2>/dev/null | grep -oE "active/idle|standby|unknown" || echo "unknown (needs root)")
+CPU_GOV=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo "unknown")
 
-echo "  CPU Scaling       : [ $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null) ]"
+echo "  CPU Scaling       : [ $CPU_GOV ]"
 echo "  CPU Load (1,5,15m): [ $CPU_LOAD ]"
 echo "  RAM Usage         : [ $RAM_INFO ]"
-echo "  HDD Drive State   : [ $HDD_STATE ]"
+
+for devpath in /sys/block/sd* /sys/block/hd*; do
+    if [ -f "$devpath/queue/rotational" ] && [ "$(cat "$devpath/queue/rotational" 2>/dev/null)" = "1" ]; then
+        disk="/dev/$(basename "$devpath")"
+        state=$(hdparm -C "$disk" 2>/dev/null | grep -oE "active/idle|standby|unknown")
+        [ -z "$state" ] && state=$(sudo -n hdparm -C "$disk" 2>/dev/null | grep -oE "active/idle|standby|unknown" || echo "unknown")
+        echo "  HDD ($disk)   : [ $state ]"
+    fi
+done
+
 echo "  Docker Containers : [ $(docker ps -q 2>/dev/null | wc -l) running ]"
 echo "================================================================"
 EOF
@@ -217,13 +308,16 @@ cat << "HELP_EOF"
   server-mode --hdd-sleep  Headless 24/7 server + mechanical HDD 10m spindown
   server-mode --bt         Headless server, but keep Bluetooth ON
   server-mode --screen     Headless server, but keep Screen ON
-  desktop-mode             Restore full graphical GNOME desktop
+  desktop-mode             Restore full graphical desktop
+
+[ CONFIGURATION ]
+  /etc/server-power-manager.conf  Set idle timer, default BT/screen/HDD modes
 
 [ DISK CONTROLS ]
-  hdd-sleep                Enable 10m mechanical spindown on /dev/sda
+  hdd-sleep                Enable 10m mechanical spindown on detected HDDs
   hdd-awake                Prevent spindown (zero lag for media/downloads)
-  sudo hdparm -y /dev/sda  Force HDD into standby immediately
-  sudo hdparm -C /dev/sda  Check if HDD is spinning or in standby
+  sudo hdparm -y /dev/sdX  Force specific HDD into standby immediately
+  sudo hdparm -C /dev/sdX  Check if HDD is spinning or in standby
 
 [ LIVE TOGGLES ]
   screen-on / screen-off   Toggle screen backlight ON or OFF
@@ -236,20 +330,30 @@ cat << "HELP_EOF"
 HELP_EOF
 EOF
 
-# 6. Setup auto-idle-server.sh
-echo "[6/8] Installing /usr/local/bin/auto-idle-server.sh (30m idle monitor)..."
+# 8. Setup auto-idle-server.sh & service
+echo "[8/9] Installing /usr/local/bin/auto-idle-server.sh (Dynamic idle monitor)..."
 cat << 'EOF' > /usr/local/bin/auto-idle-server.sh
 #!/bin/bash
-IDLE_THRESHOLD_MS=1800000
+
 POLL_INTERVAL_SEC=30
 
 while true; do
     sleep "$POLL_INTERVAL_SEC"
 
-    # Only monitor if desktop is active
-    if ! systemctl is-active --quiet gdm3; then
-        continue
-    fi
+    # Read configuration (fallback to 30m if not set)
+    IDLE_MINS=30
+    [ -f /etc/server-power-manager.conf ] && . /etc/server-power-manager.conf
+    IDLE_THRESHOLD_MS=$(( ${IDLE_TIMEOUT_MINUTES:-30} * 60 * 1000 ))
+
+    # Only monitor if desktop display manager is active
+    DM_RUNNING=false
+    for dm in display-manager gdm3 gdm sddm lightdm; do
+        if systemctl is-active --quiet "$dm" 2>/dev/null; then
+            DM_RUNNING=true
+            break
+        fi
+    done
+    [ "$DM_RUNNING" = false ] && continue
 
     ACTIVE_UID=""
     while read -r sid uid user seat tty state rest; do
@@ -291,19 +395,17 @@ while true; do
     fi
 
     if [ "$IDLE_MS" -ge "$IDLE_THRESHOLD_MS" ]; then
-        logger -t auto-idle-server "System idle >= 30m (${IDLE_MS}ms). Entering server-mode."
+        logger -t auto-idle-server "System idle >= ${IDLE_TIMEOUT_MINUTES:-30}m (${IDLE_MS}ms). Entering server-mode."
         /usr/local/bin/server-mode
     fi
 done
 EOF
 
-# 7. Setup systemd service
-echo "[7/8] Installing /etc/systemd/system/auto-idle-server.service..."
 cat << 'EOF' > /etc/systemd/system/auto-idle-server.service
 [Unit]
-Description=Antigravity Auto-Idle Server Mode Switcher
-After=multi-user.target gdm3.service
-Wants=gdm3.service
+Description=Server Power Manager Auto-Idle Monitor
+After=multi-user.target
+Wants=display-manager.service
 
 [Service]
 Type=simple
@@ -316,8 +418,8 @@ KillMode=mixed
 WantedBy=multi-user.target
 EOF
 
-# 8. Set permissions and enable service
-echo "[8/8] Setting permissions and enabling service..."
+# 9. Set permissions and enable service
+echo "[9/9] Setting permissions and enabling service..."
 chmod +x /usr/local/bin/server-mode \
          /usr/local/bin/desktop-mode \
          /usr/local/bin/screen-on \
@@ -334,5 +436,8 @@ systemctl daemon-reload
 systemctl enable --now auto-idle-server.service
 
 echo ""
+echo "================================================================="
 echo "==> Setup complete! auto-idle-server.service is enabled and active."
+echo "==> Config file: /etc/server-power-manager.conf"
+echo "================================================================="
 systemctl status auto-idle-server.service --no-pager
