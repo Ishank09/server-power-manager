@@ -31,8 +31,22 @@ fi
 systemctl restart tlp 2>/dev/null || true
 echo " [+] Battery charge threshold active (caps charge at 80% to prevent swelling)."
 
-# 3. Setup configuration file
-echo "[3/10] Installing default configuration in /etc/server-power-manager.conf..."
+# 3. Disable unneeded background services (CUPS printer daemon, ModemManager, Tracker3)
+echo "[3/11] Disabling unnecessary background services (CUPS, ModemManager, Tracker3)..."
+for svc in cups.service cups-browsed.service ModemManager.service; do
+    if systemctl is-enabled --quiet "$svc" 2>/dev/null || systemctl is-active --quiet "$svc" 2>/dev/null; then
+        systemctl stop "$svc" 2>/dev/null || true
+        systemctl disable "$svc" 2>/dev/null || true
+    fi
+done
+for u in $(loginctl list-users --no-legend 2>/dev/null | awk '$1 >= 1000 {print $2}'); do
+    systemctl --user -M "${u}@" mask tracker-miner-fs-3.service 2>/dev/null || true
+    systemctl --user -M "${u}@" stop tracker-miner-fs-3.service 2>/dev/null || true
+done
+echo " [+] CUPS, ModemManager & Tracker3 crawler disabled (Wi-Fi & NetworkManager untouched)."
+
+# 4. Setup configuration file
+echo "[4/11] Installing default configuration in /etc/server-power-manager.conf..."
 if [ ! -f /etc/server-power-manager.conf ]; then
     cat << 'EOF' > /etc/server-power-manager.conf
 # /etc/server-power-manager.conf
@@ -55,8 +69,8 @@ else
     echo " [.] Existing /etc/server-power-manager.conf preserved."
 fi
 
-# 4. Setup laptop lid-close behavior (ignore lid close to prevent unintended suspend)
-echo "[4/10] Configuring clean laptop lid-close behavior..."
+# 5. Setup laptop lid-close behavior (ignore lid close to prevent unintended suspend)
+echo "[5/11] Configuring clean laptop lid-close behavior..."
 mkdir -p /etc/systemd/logind.conf.d
 cat << 'EOF' > /etc/systemd/logind.conf.d/server-lid.conf
 [Login]
@@ -67,8 +81,8 @@ EOF
 systemctl kill -s HUP systemd-logind 2>/dev/null || true
 echo " [+] Laptop lid-close set to ignore (no logind suspend spam)."
 
-# 5. Setup server-mode
-echo "[5/10] Installing /usr/local/bin/server-mode..."
+# 6. Setup server-mode
+echo "[6/11] Installing /usr/local/bin/server-mode..."
 cat << 'EOF' > /usr/local/bin/server-mode
 #!/bin/bash
 [ "$EUID" -ne 0 ] && exec sudo "$0" "$@"
@@ -162,11 +176,19 @@ if command -v tlp >/dev/null 2>&1; then
     tlp bat >/dev/null 2>&1 || true
     echo " [+] Power Profile: TLP Low-Power / ASPM Active"
 fi
+
+# Wired Ethernet Power-Down (Only when disconnected, leaves Wi-Fi 100% untouched)
+for eth in $(ip -o link show 2>/dev/null | awk -F': ' '$2 ~ /^(en|eth)/ {print $2}'); do
+    if ip link show "$eth" 2>/dev/null | grep -q "NO-CARRIER"; then
+        ip link set "$eth" down 2>/dev/null || true
+        echo " [+] Ethernet ($eth): Powered off (no cable connected)"
+    fi
+done
 echo "==> ACTIVE: Server mode running. Maximum RAM freed & CPU throttled to minimum."
 EOF
 
-# 6. Setup desktop-mode
-echo "[6/10] Installing /usr/local/bin/desktop-mode..."
+# 7. Setup desktop-mode
+echo "[7/11] Installing /usr/local/bin/desktop-mode..."
 cat << 'EOF' > /usr/local/bin/desktop-mode
 #!/bin/bash
 [ "$EUID" -ne 0 ] && exec sudo "$0" "$@"
@@ -188,12 +210,15 @@ for epp in /sys/devices/system/cpu/cpu*/cpufreq/energy_performance_preference; d
     [ -f "$epp" ] && echo "balance_performance" > "$epp" 2>/dev/null || true
 done
 
-# 3. Wake up mechanical HDDs
+# 3. Wake up mechanical HDDs and restore wired Ethernet
 for devpath in /sys/block/sd* /sys/block/hd*; do
     if [ -f "$devpath/queue/rotational" ] && [ "$(cat "$devpath/queue/rotational" 2>/dev/null)" = "1" ]; then
         disk="/dev/$(basename "$devpath")"
         hdparm -B 254 -S 0 "$disk" > /dev/null 2>&1
     fi
+done
+for eth in $(ip -o link show 2>/dev/null | awk -F': ' '$2 ~ /^(en|eth)/ {print $2}'); do
+    ip link set "$eth" up 2>/dev/null || true
 done
 
 # 4. Start Desktop Interface (Display Manager)
@@ -209,8 +234,8 @@ systemctl start display-manager 2>/dev/null || systemctl start gdm3 2>/dev/null 
 echo "==> ACTIVE: Desktop interface restored and screen backlight on."
 EOF
 
-# 7. Setup hardware toggles
-echo "[7/10] Installing hardware toggle scripts..."
+# 8. Setup hardware toggles
+echo "[8/11] Installing hardware toggle scripts..."
 cat << 'EOF' > /usr/local/bin/screen-on
 #!/bin/bash
 [ "$EUID" -ne 0 ] && exec sudo "$0" "$@"
@@ -272,8 +297,8 @@ done
 [ "$FOUND" = false ] && echo "No rotational mechanical HDDs detected (SSDs/NVMe skipped)."
 EOF
 
-# 8. Setup status & help
-echo "[8/10] Installing server-status and server-help..."
+# 9. Setup status & help
+echo "[9/11] Installing server-status and server-help..."
 cat << 'EOF' > /usr/local/bin/server-status
 #!/bin/bash
 echo "==================== SERVER HARDWARE STATUS ===================="
@@ -372,8 +397,8 @@ cat << "HELP_EOF"
 HELP_EOF
 EOF
 
-# 9. Setup auto-idle-server.sh & service
-echo "[9/10] Installing /usr/local/bin/auto-idle-server.sh (Dynamic idle monitor)..."
+# 10. Setup auto-idle-server.sh & service
+echo "[10/11] Installing /usr/local/bin/auto-idle-server.sh (Dynamic idle monitor)..."
 cat << 'EOF' > /usr/local/bin/auto-idle-server.sh
 #!/bin/bash
 
@@ -445,8 +470,8 @@ KillMode=mixed
 WantedBy=multi-user.target
 EOF
 
-# 10. Set permissions and enable service
-echo "[10/10] Setting permissions and enabling service..."
+# 11. Set permissions and enable service
+echo "[11/11] Setting permissions and enabling service..."
 chmod +x /usr/local/bin/server-mode \
          /usr/local/bin/desktop-mode \
          /usr/local/bin/screen-on \

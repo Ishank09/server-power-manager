@@ -12,15 +12,19 @@ Lightweight power management and headless server mode switcher for Ubuntu / Debi
   - **CPU Power Throttling:** Locks scaling governor to `powersave` and energy performance preference to `power`.
   - **Mechanical HDD Auto-Sleep:** Automatically detects rotational disks (`/sys/block/*/queue/rotational`) and spins them down while leaving SSDs/NVMe drives untouched.
   - **Display & Radio Off:** Turns off backlight (brightness 0) and disables Bluetooth.
-  - **Preserves Headless Services:** Keeps remote SSH, Mosh, Docker containers, and background system daemons online.
+  - **Disconnected Ethernet Power-Down:** Powers down disconnected wired Ethernet interfaces (`NO-CARRIER`), saving ~0.5W-1.0W while leaving Wi-Fi, Tailscale, and Docker containers 100% active and untouched.
+  - **Preserves Headless Services:** Keeps remote SSH, Mosh, Docker containers, Wi-Fi connectivity, and background system daemons online.
 - **`desktop-mode`**:
   - Restores the graphical display manager.
-  - Restores TLP AC profile, wakes up mechanical HDDs, unblocks Bluetooth, and restores screen backlight.
+  - Restores TLP AC profile, wakes up mechanical HDDs, unblocks Bluetooth, restores screen backlight, and brings wired Ethernet back up.
   - Switches CPU governor back to `performance` / `balance_performance`.
 - **`auto-idle-server`**:
   - Background systemd service that tracks user desktop idle time via Mutter/DBus.
   - **Audio/Media Inactivity Safeguard:** Checks ALSA/kernel audio streams and defers switching to server mode if audio or media is actively playing (e.g. YouTube, Spotify, VLC).
   - Automatically enters `server-mode` when the system is inactive for a configurable duration.
+- **Background Daemon & Indexer Trimming**:
+  - **Prunes Inactive Daemons:** Stops and disables unused printing daemons (`cups`, `cups-browsed`) and cellular modem scanners (`ModemManager`).
+  - **Stops Disk Indexing Crawler:** Masks GNOME Tracker3 (`tracker-miner-fs-3.service`) to eliminate unwanted background disk and CPU thrashing without breaking desktop search.
 - **Laptop Hardware & Battery Protection**:
   - **Battery Charge Capping:** Configures TLP / SMBIOS to stop charging at **80%** (`/etc/tlp.d/01-battery.conf`), preventing battery swelling and wear during 24/7 plugged-in operation.
   - **Lid-Close Management:** Configures `systemd-logind` to ignore lid switches, allowing laptops to run 24/7 with the lid closed without suspending or spamming logind errors.

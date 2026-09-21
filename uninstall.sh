@@ -47,9 +47,26 @@ rm -f /etc/tlp.d/01-battery.conf
 systemctl restart tlp 2>/dev/null || true
 
 # 5. Restore default desktop & CPU governor
-echo "[5/5] Restoring default hardware state..."
+echo "[5/5] Restoring default hardware & service state..."
 rfkill unblock bluetooth 2>/dev/null || true
 systemctl start bluetooth 2>/dev/null || true
+
+# Restore wired Ethernet interfaces
+for eth in $(ip -o link show 2>/dev/null | awk -F': ' '$2 ~ /^(en|eth)/ {print $2}'); do
+    ip link set "$eth" up 2>/dev/null || true
+done
+
+# Re-enable standard desktop background services
+for svc in cups.service cups-browsed.service ModemManager.service; do
+    systemctl enable "$svc" 2>/dev/null || true
+    systemctl start "$svc" 2>/dev/null || true
+done
+
+# Unmask Tracker3 file indexing for users
+for u in $(loginctl list-users --no-legend 2>/dev/null | awk '$1 >= 1000 {print $2}'); do
+    systemctl --user -M "${u}@" unmask tracker-miner-fs-3.service 2>/dev/null || true
+    systemctl --user -M "${u}@" start tracker-miner-fs-3.service 2>/dev/null || true
+done
 
 MAX_B=$(cat /sys/class/backlight/*/max_brightness 2>/dev/null | head -n 1)
 [ -n "$MAX_B" ] && echo "$MAX_B" | tee /sys/class/backlight/*/brightness > /dev/null 2>&1
