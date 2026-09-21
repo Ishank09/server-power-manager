@@ -112,17 +112,8 @@ for dm in display-manager gdm3 gdm sddm lightdm; do
     fi
 done
 
-# 1. Gracefully terminate desktop applications and GUI terminal sessions
-# (Preserves remote SSH/Mosh sessions, Docker, and background system services)
-echo " [*] Gracefully terminating desktop applications and GUI terminals..."
-for u in $(loginctl list-users --no-legend 2>/dev/null | awk '$1 >= 1000 {print $2}'); do
-    pkill -TERM -u "$u" -f "brave|chrome|chromium|gnome-terminal-server" 2>/dev/null || true
-done
-sleep 2
-for u in $(loginctl list-users --no-legend 2>/dev/null | awk '$1 >= 1000 {print $2}'); do
-    pkill -KILL -u "$u" -f "brave|chrome|chromium|gnome-terminal-server" 2>/dev/null || true
-    systemctl --user -M "${u}@" stop app.slice 2>/dev/null || true
-done
+# 1. Desktop cleanup handled by display-manager stop above
+# (Preserves remote SSH/Mosh sessions, Docker, user processes, and background system services)
 
 # 2. Flush disk caches and compact memory
 echo " [*] Flushing disk caches and compacting memory..."
