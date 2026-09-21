@@ -24,8 +24,6 @@ Lightweight power management and headless server mode switcher for Ubuntu / Debi
 - **Laptop Hardware & Battery Protection**:
   - **Battery Charge Capping:** Configures TLP / SMBIOS to stop charging at **80%** (`/etc/tlp.d/01-battery.conf`), preventing battery swelling and wear during 24/7 plugged-in operation.
   - **Lid-Close Management:** Configures `systemd-logind` to ignore lid switches, allowing laptops to run 24/7 with the lid closed without suspending or spamming logind errors.
-- **Docker Log Rotation**:
-  - Automatically configures `/etc/docker/daemon.json` (50MB x 3 files) to prevent long-running 24/7 containers from filling disk space.
 - **Hardware Toggles & Diagnostics**:
   - `screen-on` / `screen-off`: Control backlight on the fly.
   - `bt-on` / `bt-off`: Toggle Bluetooth radio.
