@@ -388,17 +388,6 @@ while true; do
         continue
     fi
 
-    # 2. Thermal Check: log a warning if CPU temperature is elevated (>85°C)
-    for tz in /sys/class/thermal/thermal_zone*; do
-        if [ "$(cat "$tz/type" 2>/dev/null)" = "x86_pkg_temp" ]; then
-            t=$(cat "$tz/temp" 2>/dev/null)
-            if [ -n "$t" ] && [ "$((t / 1000))" -ge 85 ]; then
-                logger -t auto-idle-server "WARNING: High CPU temperature detected ($((t / 1000))°C)"
-            fi
-            break
-        fi
-    done
-
     ACTIVE_UID=""
     while read -r sid uid user seat tty state rest; do
         if [ "$seat" = "seat0" ] && [ "$state" = "active" ]; then
