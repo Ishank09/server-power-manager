@@ -363,56 +363,30 @@ echo "[8/9] Installing /usr/local/bin/auto-idle-server.sh (Dynamic idle monitor)
 cat << 'EOF' > /usr/local/bin/auto-idle-server.sh
 #!/bin/bash
 
-POLL_INTERVAL_SEC=30
+POLL_INTERVAL_SEC=60
 
 while true; do
     sleep "$POLL_INTERVAL_SEC"
 
-    # Read configuration (fallback to 30m if not set)
+    # 1. Fast check: Only monitor if desktop is active; if already in headless server mode, skip immediately
+    if ! systemctl is-active --quiet display-manager gdm3 2>/dev/null; then
+        continue
+    fi
+
+    # 2. Read configuration
     IDLE_MINS=30
     [ -f /etc/server-power-manager.conf ] && . /etc/server-power-manager.conf
     IDLE_THRESHOLD_MS=$(( ${IDLE_TIMEOUT_MINUTES:-30} * 60 * 1000 ))
 
-    # Only monitor if desktop display manager is active
-    DM_RUNNING=false
-    for dm in display-manager gdm3 gdm sddm lightdm; do
-        if systemctl is-active --quiet "$dm" 2>/dev/null; then
-            DM_RUNNING=true
+    # 3. Find active user DBus target without heavy subprocess scraping
+    TARGET_UID=""
+    for u in 1000 $(id -u gdm 2>/dev/null); do
+        if [ -S "/run/user/$u/bus" ]; then
+            TARGET_UID="$u"
             break
         fi
     done
-    [ "$DM_RUNNING" = false ] && continue
-
-    # 1. Media & Audio Safeguard: defer idle if audio is actively playing (e.g. YouTube, Spotify, VLC)
-    if grep -q "state: RUNNING" /proc/asound/card*/pcm*/sub*/status 2>/dev/null; then
-        continue
-    fi
-
-    ACTIVE_UID=""
-    while read -r sid uid user seat tty state rest; do
-        if [ "$seat" = "seat0" ] && [ "$state" = "active" ]; then
-            CLASS=$(loginctl show-session "$sid" -p Class --value 2>/dev/null)
-            if [ "$CLASS" = "user" ] && [ "$uid" -ge 1000 ]; then
-                ACTIVE_UID="$uid"
-                break
-            fi
-        fi
-    done < <(loginctl list-sessions --no-legend 2>/dev/null)
-
-    TARGET_UID=""
-    if [ -n "$ACTIVE_UID" ]; then
-        TARGET_UID="$ACTIVE_UID"
-    else
-        GDM_UID=$(id -u gdm 2>/dev/null)
-        if [ -n "$GDM_UID" ] && [ -S "/run/user/$GDM_UID/bus" ]; then
-            TARGET_UID="$GDM_UID"
-        fi
-    fi
-
-    # Fail-safe: if target bus is unavailable, do nothing
-    if [ -z "$TARGET_UID" ] || [ ! -S "/run/user/$TARGET_UID/bus" ]; then
-        continue
-    fi
+    [ -z "$TARGET_UID" ] && continue
 
     IDLE_MS=$(sudo -u "#$TARGET_UID" \
         DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$TARGET_UID/bus" \
@@ -427,7 +401,13 @@ while true; do
         continue
     fi
 
+    # 4. Threshold reached: check audio safeguard on-demand ONLY, then enter server mode
     if [ "$IDLE_MS" -ge "$IDLE_THRESHOLD_MS" ]; then
+        # Audio Safeguard: only checked when idle time threshold is met, never polled while active
+        if grep -q "state: RUNNING" /proc/asound/card*/pcm*/sub*/status 2>/dev/null; then
+            continue
+        fi
+
         logger -t auto-idle-server "System idle >= ${IDLE_TIMEOUT_MINUTES:-30}m (${IDLE_MS}ms). Entering server-mode."
         /usr/local/bin/server-mode
     fi
