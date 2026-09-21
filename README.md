@@ -7,6 +7,7 @@ Lightweight power management and headless server mode switcher for Ubuntu / Debi
 - **`server-mode`**:
   - **Universal Display Manager Shutdown:** Automatically detects and stops `gdm3`, `sddm`, `lightdm`, or `display-manager.service`.
   - **Aggressive RAM & CPU Reclamation:** Gracefully terminates GUI applications (`SIGTERM` followed by `SIGKILL`) and stops `app.slice`, freeing ~2.5GB+ of RAM and stopping background CPU timers.
+  - **TLP Power Profile:** Activates `tlp bat` for deep PCIe ASPM (Active State Power Management), SATA link power-saving, and runtime USB autosuspend.
   - **Cache Purging & Compaction:** Flushes dirty disk page caches (`drop_caches=3`) and compacts RAM.
   - **CPU Power Throttling:** Locks scaling governor to `powersave` and energy performance preference to `power`.
   - **Mechanical HDD Auto-Sleep:** Automatically detects rotational disks (`/sys/block/*/queue/rotational`) and spins them down while leaving SSDs/NVMe drives untouched.
@@ -14,10 +15,11 @@ Lightweight power management and headless server mode switcher for Ubuntu / Debi
   - **Preserves Headless Services:** Keeps remote SSH, Mosh, Docker containers, and background system daemons online.
 - **`desktop-mode`**:
   - Restores the graphical display manager.
-  - Wakes up mechanical HDDs, unblocks Bluetooth, and restores screen backlight.
+  - Restores TLP AC profile, wakes up mechanical HDDs, unblocks Bluetooth, and restores screen backlight.
   - Switches CPU governor back to `performance` / `balance_performance`.
 - **`auto-idle-server`**:
   - Background systemd service that tracks user desktop idle time via Mutter/DBus.
+  - **Audio/Media Inactivity Safeguard:** Checks ALSA/kernel audio streams and defers switching to server mode if audio or media is actively playing (e.g. YouTube, Spotify, VLC).
   - Automatically enters `server-mode` when the system is inactive for a configurable duration.
 - **Laptop Lid-Close Management**:
   - Configures `systemd-logind` to ignore lid switches, allowing laptops to run 24/7 with the lid closed without suspending or spamming logind errors.
@@ -25,7 +27,7 @@ Lightweight power management and headless server mode switcher for Ubuntu / Debi
   - `screen-on` / `screen-off`: Control backlight on the fly.
   - `bt-on` / `bt-off`: Toggle Bluetooth radio.
   - `hdd-sleep` / `hdd-awake`: Control spindown across all rotational drives.
-  - `server-status`: Real-time summary of desktop state, backlight, Bluetooth, CPU load (1/5/15m), RAM usage, HDD spindown states, and Docker containers.
+  - `server-status`: Real-time summary of desktop state, backlight, Bluetooth, CPU temperature, CPU load (1/5/15m), RAM usage, HDD spindown states, and Docker containers.
 
 ## Configuration
 

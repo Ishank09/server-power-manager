@@ -15,6 +15,7 @@ echo "================================================================="
 echo "[1/9] Installing dependencies (hdparm, tlp, tlp-rdw)..."
 apt update
 apt install -y hdparm tlp tlp-rdw
+systemctl enable --now tlp 2>/dev/null || true
 
 # 2. Setup configuration file
 echo "[2/9] Installing default configuration in /etc/server-power-manager.conf..."
@@ -141,6 +142,12 @@ echo "powersave" | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor > /
 for epp in /sys/devices/system/cpu/cpu*/cpufreq/energy_performance_preference; do
     [ -f "$epp" ] && echo "power" > "$epp" 2>/dev/null || true
 done
+
+# TLP Power Profile (PCIe ASPM & SATA Link Power Management)
+if command -v tlp >/dev/null 2>&1; then
+    tlp bat >/dev/null 2>&1 || true
+    echo " [+] Power Profile: TLP Low-Power / ASPM Active"
+fi
 echo "==> ACTIVE: Server mode running. Maximum RAM freed & CPU throttled to minimum."
 EOF
 
@@ -156,9 +163,12 @@ MAX_B=$(cat /sys/class/backlight/*/max_brightness 2>/dev/null | head -n 1)
 [ -n "$MAX_B" ] && echo "$MAX_B" | tee /sys/class/backlight/*/brightness > /dev/null 2>&1
 setterm --blank poke < /dev/tty1 2>/dev/null || true
 
-# 2. Unblock Bluetooth & CPU Performance
+# 2. Unblock Bluetooth, Restore TLP AC Profile & CPU Performance
 rfkill unblock bluetooth
 systemctl start bluetooth 2>/dev/null
+if command -v tlp >/dev/null 2>&1; then
+    tlp ac >/dev/null 2>&1 || true
+fi
 echo "performance" | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor > /dev/null 2>&1
 for epp in /sys/devices/system/cpu/cpu*/cpufreq/energy_performance_preference; do
     [ -f "$epp" ] && echo "balance_performance" > "$epp" 2>/dev/null || true
@@ -280,8 +290,26 @@ RAM_INFO=$(free -h 2>/dev/null | awk '/^Mem:/ {print $3 "/" $2 " used"}')
 CPU_LOAD=$(awk '{print $1 ", " $2 ", " $3}' /proc/loadavg 2>/dev/null)
 CPU_GOV=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo "unknown")
 
+CPU_TEMP=""
+for tz in /sys/class/thermal/thermal_zone*; do
+    type=$(cat "$tz/type" 2>/dev/null)
+    if [ "$type" = "x86_pkg_temp" ] || [ "$type" = "cpu-thermal" ] || [ "$type" = "acpitz" ]; then
+        raw_temp=$(cat "$tz/temp" 2>/dev/null)
+        if [ -n "$raw_temp" ] && [ "$raw_temp" -gt 0 ]; then
+            celsius=$((raw_temp / 1000))
+            if [ "$celsius" -ge 80 ]; then
+                CPU_TEMP="${celsius}°C (HIGH)"
+            else
+                CPU_TEMP="${celsius}°C"
+            fi
+            break
+        fi
+    fi
+done
+
 echo "  CPU Scaling       : [ $CPU_GOV ]"
 echo "  CPU Load (1,5,15m): [ $CPU_LOAD ]"
+[ -n "$CPU_TEMP" ] && echo "  CPU Temperature   : [ $CPU_TEMP ]"
 echo "  RAM Usage         : [ $RAM_INFO ]"
 
 for devpath in /sys/block/sd* /sys/block/hd*; do
@@ -354,6 +382,22 @@ while true; do
         fi
     done
     [ "$DM_RUNNING" = false ] && continue
+
+    # 1. Media & Audio Safeguard: defer idle if audio is actively playing (e.g. YouTube, Spotify, VLC)
+    if grep -q "state: RUNNING" /proc/asound/card*/pcm*/sub*/status 2>/dev/null; then
+        continue
+    fi
+
+    # 2. Thermal Check: log a warning if CPU temperature is elevated (>85°C)
+    for tz in /sys/class/thermal/thermal_zone*; do
+        if [ "$(cat "$tz/type" 2>/dev/null)" = "x86_pkg_temp" ]; then
+            t=$(cat "$tz/temp" 2>/dev/null)
+            if [ -n "$t" ] && [ "$((t / 1000))" -ge 85 ]; then
+                logger -t auto-idle-server "WARNING: High CPU temperature detected ($((t / 1000))°C)"
+            fi
+            break
+        fi
+    done
 
     ACTIVE_UID=""
     while read -r sid uid user seat tty state rest; do
