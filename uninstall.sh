@@ -40,9 +40,11 @@ rm -f /usr/local/bin/server-mode \
       /usr/local/bin/server-help \
       /usr/local/bin/auto-idle-server.sh
 
-# 4. Remove config file
-echo "[4/5] Removing /etc/server-power-manager.conf..."
+# 4. Remove config files
+echo "[4/5] Removing configuration files..."
 rm -f /etc/server-power-manager.conf
+rm -f /etc/tlp.d/01-battery.conf
+systemctl restart tlp 2>/dev/null || true
 
 # 5. Restore default desktop & CPU governor
 echo "[5/5] Restoring default hardware state..."

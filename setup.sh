@@ -12,13 +12,45 @@ echo "   Setting up Server / Desktop Power Management & Auto-Idle"
 echo "================================================================="
 
 # 1. Install required packages
-echo "[1/9] Installing dependencies (hdparm, tlp, tlp-rdw)..."
+echo "[1/11] Installing dependencies (hdparm, tlp, tlp-rdw, smbios-utils)..."
 apt update
-apt install -y hdparm tlp tlp-rdw
+apt install -y hdparm tlp tlp-rdw smbios-utils
 systemctl enable --now tlp 2>/dev/null || true
 
-# 2. Setup configuration file
-echo "[2/9] Installing default configuration in /etc/server-power-manager.conf..."
+# 2. Configure battery protection (80% stop threshold for 24/7 AC power)
+echo "[2/11] Configuring battery charge threshold (80% stop) to protect battery longevity..."
+mkdir -p /etc/tlp.d
+cat << 'EOF' > /etc/tlp.d/01-battery.conf
+# Battery charging threshold for 24/7 AC plugged-in operation
+START_CHARGE_THRESH_BAT0=75
+STOP_CHARGE_THRESH_BAT0=80
+EOF
+if command -v smbios-battery-ctl >/dev/null 2>&1; then
+    smbios-battery-ctl --set-charging-mode=primarily-ac-use 2>/dev/null || true
+fi
+systemctl restart tlp 2>/dev/null || true
+echo " [+] Battery charge threshold active (caps charge at 80% to prevent swelling)."
+
+# 3. Configure Docker log rotation (50MB x 3 files max per container)
+echo "[3/11] Configuring Docker log rotation..."
+if [ -d /etc/docker ] && [ ! -f /etc/docker/daemon.json ]; then
+    cat << 'EOF' > /etc/docker/daemon.json
+{
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "50m",
+    "max-file": "3"
+  }
+}
+EOF
+    systemctl reload docker 2>/dev/null || true
+    echo " [+] Docker log rotation configured (/etc/docker/daemon.json)."
+else
+    echo " [.] Docker log config preserved or /etc/docker not present."
+fi
+
+# 4. Setup configuration file
+echo "[4/11] Installing default configuration in /etc/server-power-manager.conf..."
 if [ ! -f /etc/server-power-manager.conf ]; then
     cat << 'EOF' > /etc/server-power-manager.conf
 # /etc/server-power-manager.conf
@@ -41,8 +73,8 @@ else
     echo " [.] Existing /etc/server-power-manager.conf preserved."
 fi
 
-# 3. Setup laptop lid-close behavior (ignore lid close to prevent unintended suspend)
-echo "[3/9] Configuring clean laptop lid-close behavior..."
+# 5. Setup laptop lid-close behavior (ignore lid close to prevent unintended suspend)
+echo "[5/11] Configuring clean laptop lid-close behavior..."
 mkdir -p /etc/systemd/logind.conf.d
 cat << 'EOF' > /etc/systemd/logind.conf.d/server-lid.conf
 [Login]
@@ -53,8 +85,8 @@ EOF
 systemctl kill -s HUP systemd-logind 2>/dev/null || true
 echo " [+] Laptop lid-close set to ignore (no logind suspend spam)."
 
-# 4. Setup server-mode
-echo "[4/9] Installing /usr/local/bin/server-mode..."
+# 6. Setup server-mode
+echo "[6/11] Installing /usr/local/bin/server-mode..."
 cat << 'EOF' > /usr/local/bin/server-mode
 #!/bin/bash
 [ "$EUID" -ne 0 ] && exec sudo "$0" "$@"
@@ -151,8 +183,8 @@ fi
 echo "==> ACTIVE: Server mode running. Maximum RAM freed & CPU throttled to minimum."
 EOF
 
-# 5. Setup desktop-mode
-echo "[5/9] Installing /usr/local/bin/desktop-mode..."
+# 7. Setup desktop-mode
+echo "[7/11] Installing /usr/local/bin/desktop-mode..."
 cat << 'EOF' > /usr/local/bin/desktop-mode
 #!/bin/bash
 [ "$EUID" -ne 0 ] && exec sudo "$0" "$@"
@@ -195,8 +227,8 @@ systemctl start display-manager 2>/dev/null || systemctl start gdm3 2>/dev/null 
 echo "==> ACTIVE: Desktop interface restored and screen backlight on."
 EOF
 
-# 6. Setup hardware toggles
-echo "[6/9] Installing hardware toggle scripts..."
+# 8. Setup hardware toggles
+echo "[8/11] Installing hardware toggle scripts..."
 cat << 'EOF' > /usr/local/bin/screen-on
 #!/bin/bash
 [ "$EUID" -ne 0 ] && exec sudo "$0" "$@"
@@ -258,8 +290,8 @@ done
 [ "$FOUND" = false ] && echo "No rotational mechanical HDDs detected (SSDs/NVMe skipped)."
 EOF
 
-# 7. Setup status & help
-echo "[7/9] Installing server-status and server-help..."
+# 9. Setup status & help
+echo "[9/11] Installing server-status and server-help..."
 cat << 'EOF' > /usr/local/bin/server-status
 #!/bin/bash
 echo "==================== SERVER HARDWARE STATUS ===================="
@@ -358,8 +390,8 @@ cat << "HELP_EOF"
 HELP_EOF
 EOF
 
-# 8. Setup auto-idle-server.sh & service
-echo "[8/9] Installing /usr/local/bin/auto-idle-server.sh (Dynamic idle monitor)..."
+# 10. Setup auto-idle-server.sh & service
+echo "[10/11] Installing /usr/local/bin/auto-idle-server.sh (Dynamic idle monitor)..."
 cat << 'EOF' > /usr/local/bin/auto-idle-server.sh
 #!/bin/bash
 
@@ -431,8 +463,8 @@ KillMode=mixed
 WantedBy=multi-user.target
 EOF
 
-# 9. Set permissions and enable service
-echo "[9/9] Setting permissions and enabling service..."
+# 11. Set permissions and enable service
+echo "[11/11] Setting permissions and enabling service..."
 chmod +x /usr/local/bin/server-mode \
          /usr/local/bin/desktop-mode \
          /usr/local/bin/screen-on \

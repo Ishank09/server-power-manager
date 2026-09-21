@@ -21,8 +21,11 @@ Lightweight power management and headless server mode switcher for Ubuntu / Debi
   - Background systemd service that tracks user desktop idle time via Mutter/DBus.
   - **Audio/Media Inactivity Safeguard:** Checks ALSA/kernel audio streams and defers switching to server mode if audio or media is actively playing (e.g. YouTube, Spotify, VLC).
   - Automatically enters `server-mode` when the system is inactive for a configurable duration.
-- **Laptop Lid-Close Management**:
-  - Configures `systemd-logind` to ignore lid switches, allowing laptops to run 24/7 with the lid closed without suspending or spamming logind errors.
+- **Laptop Hardware & Battery Protection**:
+  - **Battery Charge Capping:** Configures TLP / SMBIOS to stop charging at **80%** (`/etc/tlp.d/01-battery.conf`), preventing battery swelling and wear during 24/7 plugged-in operation.
+  - **Lid-Close Management:** Configures `systemd-logind` to ignore lid switches, allowing laptops to run 24/7 with the lid closed without suspending or spamming logind errors.
+- **Docker Log Rotation**:
+  - Automatically configures `/etc/docker/daemon.json` (50MB x 3 files) to prevent long-running 24/7 containers from filling disk space.
 - **Hardware Toggles & Diagnostics**:
   - `screen-on` / `screen-off`: Control backlight on the fly.
   - `bt-on` / `bt-off`: Toggle Bluetooth radio.
